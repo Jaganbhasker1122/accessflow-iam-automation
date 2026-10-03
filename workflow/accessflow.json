@@ -1,0 +1,72 @@
+{
+  "name": "AccessFlow - IAM Authorization Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "accessflow/request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Access Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "accessflow-request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst required = ['user','department','requested_role','resource'];\nconst missing = required.filter(k => !body[k]);\nif (missing.length) {\n  return [{ json: { valid: false, status: 'DENIED', reason: `Missing fields: ${missing.join(', ')}`, request: body } }];\n}\nreturn [{ json: { valid: true, request: body } }];"
+      },
+      "id": "2",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.request;\nif (!$json.valid) return [{ json: $json }];\n\nconst policies = {\n  developer: ['github-repository', 'staging-environment'],\n  analyst: ['analytics-dashboard'],\n  viewer: ['documentation']\n};\n\nconst allowedResources = policies[input.requested_role] || [];\nconst approved = allowedResources.includes(input.resource);\n\nreturn [{\n  json: {\n    ...$json,\n    role: input.requested_role,\n    allowedResources,\n    approved,\n    status: approved ? 'APPROVED' : 'DENIED',\n    reason: approved ? 'Role is permitted to access requested resource.' : 'Role is not permitted to access requested resource.'\n  }\n}];"
+      },
+      "id": "3",
+      "name": "Authorization Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json.request || {};\nconst audit = {\n  timestamp: new Date().toISOString(),\n  user: r.user,\n  department: r.department,\n  role: r.requested_role,\n  resource: r.resource,\n  decision: $json.status,\n  reason: $json.reason\n};\nreturn [{ json: { ...$json, audit } }];"
+      },
+      "id": "4",
+      "name": "Create Audit Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: $json.status, user: $json.request.user, role: $json.request.requested_role, resource: $json.request.resource, reason: $json.reason, audit: $json.audit } }}",
+        "options": {}
+      },
+      "id": "5",
+      "name": "Authorization Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1020, 0]
+    }
+  ],
+  "connections": {
+    "Access Request Webhook": { "main": [[{ "node": "Validate Request", "type": "main", "index": 0 }]] },
+    "Validate Request": { "main": [[{ "node": "Authorization Decision", "type": "main", "index": 0 }]] },
+    "Authorization Decision": { "main": [[{ "node": "Create Audit Event", "type": "main", "index": 0 }]] },
+    "Create Audit Event": { "main": [[{ "node": "Authorization Response", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "accessflow-demo-v1",
+  "meta": { "templateCredsSetupCompleted": true },
+  "tags": []
+}
